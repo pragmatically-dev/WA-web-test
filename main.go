@@ -29,8 +29,18 @@ func eventHandler(evt interface{}) {
 	}
 }
 
-func main() {
+func sendTestMessage(client *whatsmeow.Client) {
 	receiver := os.Getenv("RECV_NUM")
+
+	jid := types.NewJID(receiver, "s.whatsapp.net")
+	resp, err := client.SendMessage(context.Background(), jid, &waE2E.Message{Conversation: proto.String("Hola desde golang")})
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println("Send message:", resp)
+}
+
+func config() (*store.Device, waLog.Logger) {
 	dbLog := waLog.Stdout("Database", "DEBUG", true)
 	container, err := sqlstore.New("sqlite3", "file:examplestore.db?_foreign_keys=on", dbLog)
 	if err != nil {
@@ -44,46 +54,43 @@ func main() {
 	//Setting UserAgent
 	store.SetOSInfo("Linux", store.GetWAVersion())
 	store.DeviceProps.PlatformType = waCompanionReg.DeviceProps_CHROME.Enum()
-
 	clientLog := waLog.Stdout("Client", "INFO", true)
+
+	return deviceStore, clientLog
+}
+
+func main() {
+	deviceStore, clientLog := config()
 	client := whatsmeow.NewClient(deviceStore, clientLog)
+	defer client.Disconnect()
+
 	client.AddEventHandler(eventHandler)
 
-	if client.Store.ID == nil {
-		// No ID stored, new login
-		qrChan, _ := client.GetQRChannel(context.Background())
-		err = client.Connect()
-		if err != nil {
-			panic(err)
-		}
-
-		for evt := range qrChan {
-			if evt.Event == "code" {
-				qrterminal.GenerateHalfBlock(evt.Code, qrterminal.L, os.Stdout)
-
-			} else {
-				//fmt.Println("Login event:", evt.Event)
-
-				jid := types.NewJID(receiver, "s.whatsapp.net")
-				resp, err := client.SendMessage(context.Background(), jid, &waE2E.Message{Conversation: proto.String("Hola desde golang")})
-				if err != nil {
-					panic(err)
-				}
-				fmt.Println("Send message:", resp)
-			}
-		}
-	} else {
-		// Already logged in, just connect
-		err = client.Connect()
-		if err != nil {
-			panic(err)
-		}
+	// Already logged in, just connect
+	if client.Store.ID != nil && client.Connect() != nil {
+		panic(fmt.Errorf("Unable to connect"))
 	}
+
+	// No ID stored, new login
+	qrChan, _ := client.GetQRChannel(context.Background())
+
+	if client.Connect() != nil {
+		panic(fmt.Errorf("Unable to connect"))
+	}
+
+	for evt := range qrChan {
+
+		if evt.Event == "code" {
+			qrterminal.GenerateHalfBlock(evt.Code, qrterminal.L, os.Stdout)
+		}
+
+	}
+
+	sendTestMessage(client)
 
 	// Listen to Ctrl+C (you can also do something else that prevents the program from exiting)
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
 	<-c
 
-	client.Disconnect()
 }
